@@ -1,0 +1,705 @@
+"""
+Tests for Keep Tahoe Blue API endpoints and functionality.
+"""
+
+import base64
+import json
+from io import BytesIO
+from pathlib import Path
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image
+
+from app.main import (
+    app,
+    determine_field_status,
+    is_valid_integer,
+    process_image_to_base64,
+    FieldStatus,
+)
+
+
+class TestFormSchemaEndpoints:
+    """Tests for form schema GET/PUT endpoints."""
+
+    def test_get_schema_when_no_schema_exists(self, tmp_path: Path, monkeypatch):
+        """Test GET /form-schema returns 404 when no schema exists."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            response = client.get("/form-schema")
+
+            assert response.status_code == 404
+            assert "No form schema configured" in response.json()["detail"]
+
+    def test_put_schema_creates_new_schema(self, tmp_path: Path, monkeypatch):
+        """Test PUT /form-schema creates a new schema with timestamp."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+                "categories": [
+                    {
+                        "name": "Plastics",
+                        "fields": [
+                            {"name": "bottles"},
+                            {"name": "bags"},
+                            {"name": "straws"}
+                        ]
+                    },
+                    {
+                        "name": "Glass",
+                        "fields": [
+                            {"name": "bottles"},
+                            {"name": "jars"}
+                        ]
+                    }
+                ]
+            }
+
+            response = client.put("/form-schema", json=schema)
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Verify schema structure
+            assert "categories" in data
+            assert "updated_at" in data
+            assert len(data["categories"]) == 2
+            assert data["categories"][0]["name"] == "Plastics"
+
+            # Verify timestamp is in ISO format
+            assert "T" in data["updated_at"]
+            assert data["updated_at"].endswith("Z")
+
+    def test_get_schema_returns_saved_schema(self, tmp_path: Path, monkeypatch):
+        """Test GET /form-schema returns the previously saved schema."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+                "categories": [
+                    {
+                        "name": "Plastics",
+                        "fields": [{"name": "bottles"}, {"name": "bags"}]
+                    }
+                ]
+            }
+
+            # First, save a schema
+            put_response = client.put("/form-schema", json=schema)
+            assert put_response.status_code == 200
+            saved_timestamp = put_response.json()["updated_at"]
+
+            # Then retrieve it
+            get_response = client.get("/form-schema")
+            assert get_response.status_code == 200
+            data = get_response.json()
+
+            # Verify the data matches
+            assert data["categories"] == schema["categories"]
+            assert data["updated_at"] == saved_timestamp
+
+    def test_put_schema_updates_existing_schema(self, tmp_path: Path, monkeypatch):
+        """Test PUT /form-schema updates existing schema with new timestamp."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            initial_schema = {
+                "categories": [
+                    {
+                        "name": "Plastics",
+                        "fields": [{"name": "bottles"}]
+                    }
+                ]
+            }
+
+            # Save initial schema
+            response1 = client.put("/form-schema", json=initial_schema)
+            timestamp1 = response1.json()["updated_at"]
+
+            # Update with modified schema
+            modified_schema = {
+                "categories": [
+                    {
+                        "name": "Paper",
+                        "fields": [{"name": "cardboard"}]
+                    }
+                ]
+            }
+            response2 = client.put("/form-schema", json=modified_schema)
+            timestamp2 = response2.json()["updated_at"]
+
+            # Verify update
+            assert response2.status_code == 200
+            assert timestamp2 > timestamp1  # New timestamp should be later
+            assert response2.json()["categories"][0]["name"] == "Paper"
+
+    def test_schema_persists_to_file(self, tmp_path: Path, monkeypatch):
+        """Test that schema is actually written to JSON file."""
+        import app.main as main_module
+
+        schema_file = tmp_path / "form_schema.json"
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', schema_file)
+            client = TestClient(app)
+            schema = {
+                "categories": [
+                    {
+                        "name": "Metal",
+                        "fields": [{"name": "cans"}, {"name": "foil"}]
+                    }
+                ]
+            }
+
+            client.put("/form-schema", json=schema)
+
+            # Verify file exists and contains correct data
+            assert schema_file.exists()
+            file_data = json.loads(schema_file.read_text())
+
+            assert "categories" in file_data
+            assert "updated_at" in file_data
+            assert file_data["categories"] == schema["categories"]
+
+
+class TestImageProcessing:
+    """Tests for image/PDF processing functionality."""
+
+    def test_process_jpg_image_to_base64(self):
+        """Test JPG image is converted to base64 PNG."""
+        # Create a sample JPG image
+        img = Image.new('RGB', (100, 100), color='red')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        jpg_bytes = buffer.read()
+
+        result = process_image_to_base64(jpg_bytes)
+
+        # Verify it's a valid base64 string
+        assert isinstance(result, str)
+        decoded = base64.b64decode(result)
+
+        # Verify it's a valid PNG image
+        img = Image.open(BytesIO(decoded))
+        assert img.format == 'PNG'
+        assert img.mode == 'RGB'
+        assert img.size == (100, 100)
+
+    def test_process_png_image_to_base64(self):
+        """Test PNG image is converted to base64 PNG."""
+        # Create a sample PNG image
+        img = Image.new('RGB', (100, 100), color='blue')
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        png_bytes = buffer.read()
+
+        result = process_image_to_base64(png_bytes)
+
+        # Verify it's a valid base64 string
+        assert isinstance(result, str)
+        decoded = base64.b64decode(result)
+
+        # Verify it's a valid PNG image
+        img = Image.open(BytesIO(decoded))
+        assert img.format == 'PNG'
+        assert img.mode == 'RGB'
+
+    def test_process_rgba_image_converts_to_rgb(self):
+        """Test RGBA image is converted to RGB before encoding."""
+        # Create a sample RGBA image
+        img = Image.new('RGBA', (100, 100), color=(0, 255, 0, 128))
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        rgba_bytes = buffer.read()
+
+        result = process_image_to_base64(rgba_bytes)
+
+        decoded = base64.b64decode(result)
+        img = Image.open(BytesIO(decoded))
+
+        # Verify conversion to RGB
+        assert img.mode == 'RGB'
+        assert img.format == 'PNG'
+
+    def test_process_image_standardizes_format(self):
+        """Test that all images are standardized to the same format."""
+        # Create JPG image
+        jpg_img = Image.new('RGB', (50, 50), color='red')
+        jpg_buffer = BytesIO()
+        jpg_img.save(jpg_buffer, format='JPEG')
+        jpg_buffer.seek(0)
+        jpg_bytes = jpg_buffer.read()
+
+        # Create PNG image
+        png_img = Image.new('RGB', (50, 50), color='blue')
+        png_buffer = BytesIO()
+        png_img.save(png_buffer, format='PNG')
+        png_buffer.seek(0)
+        png_bytes = png_buffer.read()
+
+        jpg_result = process_image_to_base64(jpg_bytes)
+        png_result = process_image_to_base64(png_bytes)
+
+        # Both should decode to PNG format
+        jpg_decoded = Image.open(BytesIO(base64.b64decode(jpg_result)))
+        png_decoded = Image.open(BytesIO(base64.b64decode(png_result)))
+
+        assert jpg_decoded.format == 'PNG'
+        assert png_decoded.format == 'PNG'
+
+
+class TestValidationLogic:
+    """Tests for field validation and status determination."""
+
+    def test_integer_with_high_confidence_is_confident(self):
+        """Test integer with confidence >= 0.95 gets 'confident' status."""
+        value, status = determine_field_status(5, 0.95)
+        assert value == "5"
+        assert status == FieldStatus.CONFIDENT
+
+        value, status = determine_field_status(10, 0.99)
+        assert value == "10"
+        assert status == FieldStatus.CONFIDENT
+
+        value, status = determine_field_status(0, 1.0)
+        assert value == "0"
+        assert status == FieldStatus.CONFIDENT
+
+    def test_integer_with_low_confidence_needs_validation(self):
+        """Test integer with confidence < 0.95 gets 'needs-validation' status."""
+        value, status = determine_field_status(5, 0.94)
+        assert value == "5"
+        assert status == FieldStatus.NEEDS_VALIDATION
+
+        value, status = determine_field_status(10, 0.5)
+        assert value == "10"
+        assert status == FieldStatus.NEEDS_VALIDATION
+
+        value, status = determine_field_status(3, 0.0)
+        assert value == "3"
+        assert status == FieldStatus.NEEDS_VALIDATION
+
+    def test_non_integer_value_gets_error_status(self):
+        """Test non-integer values get 'error' status regardless of confidence."""
+        value, status = determine_field_status("abc", 0.99)
+        assert value == "abc"
+        assert status == FieldStatus.ERROR
+
+        value, status = determine_field_status("12.5", 1.0)
+        assert value == "12.5"
+        assert status == FieldStatus.ERROR
+
+        value, status = determine_field_status("text123", 0.95)
+        assert value == "text123"
+        assert status == FieldStatus.ERROR
+
+    def test_none_value_converted_to_zero(self):
+        """Test None values are converted to '0'."""
+        # None with high confidence
+        value, status = determine_field_status(None, 0.99)
+        assert value == "0"
+        assert status == FieldStatus.CONFIDENT
+
+        # None with low confidence
+        value, status = determine_field_status(None, 0.80)
+        assert value == "0"
+        assert status == FieldStatus.NEEDS_VALIDATION
+
+    def test_is_valid_integer_function(self):
+        """Test integer validation helper function."""
+        assert is_valid_integer(5) is True
+        assert is_valid_integer(0) is True
+        assert is_valid_integer(-10) is True
+        assert is_valid_integer("42") is True
+        assert is_valid_integer(None) is True  # None is valid (converted to 0)
+
+        assert is_valid_integer("abc") is False
+        assert is_valid_integer("12.5") is False
+        assert is_valid_integer(12.5) is False
+
+
+class TestUploadEndpoint:
+    """Tests for the /upload endpoint."""
+
+    def test_upload_over_100_images_raises_validation_error(self, tmp_path: Path, monkeypatch):
+        """Test uploading > 100 images returns 400 validation error."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+            "categories": [
+                {
+                    "name": "Plastics",
+                    "fields": [{"name": "bottles"}]
+                }
+            ]
+        }
+
+        # Setup schema
+        client.put("/form-schema", json=schema)
+
+        # Create a sample image
+        img = Image.new('RGB', (50, 50), color='red')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        image_bytes = buffer.read()
+
+        # Create 101 files
+        files = [
+            ("files", (f"image_{i}.jpg", BytesIO(image_bytes), "image/jpeg"))
+            for i in range(101)
+        ]
+
+        metadata = json.dumps([
+            {"uuid": f"test-uuid-{i}", "metadata": {}}
+            for i in range(101)
+        ])
+
+            response = client.post(
+                "/upload",
+                files=files,
+                data={"metadata": metadata}
+            )
+
+            assert response.status_code == 400
+            assert "Too many images" in response.json()["detail"]
+            assert "100" in response.json()["detail"]
+
+    def test_upload_exactly_100_images_succeeds(self, tmp_path: Path, monkeypatch, mocker):
+        """Test uploading exactly 100 images succeeds."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+            "categories": [
+                {
+                    "name": "Plastics",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "bags"},
+                        {"name": "straws"}
+                    ]
+                },
+                {
+                    "name": "Glass",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "jars"}
+                    ]
+                }
+            ]
+        }
+
+        # Setup schema
+        client.put("/form-schema", json=schema)
+
+        # Mock OCR to avoid processing overhead
+        mock_ocr = mocker.patch('app.main.ocr_process_images')
+        mock_ocr.return_value = {
+            f"test-uuid-{i}": {
+                "Plastics": {
+                    "bottles": {"value": 5, "confidence": 0.99},
+                    "bags": {"value": 3, "confidence": 0.99},
+                    "straws": {"value": 2, "confidence": 0.99}
+                },
+                "Glass": {
+                    "bottles": {"value": 1, "confidence": 0.99},
+                    "jars": {"value": 0, "confidence": 0.99}
+                }
+            }
+            for i in range(100)
+        }
+
+        # Create a sample image
+        img = Image.new('RGB', (50, 50), color='red')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        image_bytes = buffer.read()
+
+        # Create 100 files
+        files = [
+            ("files", (f"image_{i}.jpg", BytesIO(image_bytes), "image/jpeg"))
+            for i in range(100)
+        ]
+
+        metadata = json.dumps([
+            {"uuid": f"test-uuid-{i}", "metadata": {}}
+            for i in range(100)
+        ])
+
+            response = client.post(
+                "/upload",
+                files=files,
+                data={"metadata": metadata}
+            )
+
+            assert response.status_code == 200
+            assert len(response.json()["results"]) == 100
+
+    def test_upload_without_schema_returns_404(self, tmp_path: Path, monkeypatch):
+        """Test upload fails if no schema is configured."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            # Create a sample image
+        img = Image.new('RGB', (50, 50), color='red')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        image_bytes = buffer.read()
+
+            files = [("files", ("image.jpg", BytesIO(image_bytes), "image/jpeg"))]
+            metadata = json.dumps([{"uuid": "test-uuid", "metadata": {}}])
+
+            response = client.post(
+                "/upload",
+                files=files,
+                data={"metadata": metadata}
+            )
+
+            assert response.status_code == 404
+            assert "No form schema configured" in response.json()["detail"]
+
+    def test_upload_processes_and_returns_correct_structure(self, tmp_path: Path, monkeypatch, mocker):
+        """Test upload returns correctly structured response."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+            "categories": [
+                {
+                    "name": "Plastics",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "bags"},
+                        {"name": "straws"}
+                    ]
+                },
+                {
+                    "name": "Glass",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "jars"}
+                    ]
+                }
+            ]
+        }
+
+        # Setup schema
+        client.put("/form-schema", json=schema)
+
+        # Mock OCR
+        mock_ocr = mocker.patch('app.main.ocr_process_images')
+        mock_ocr.return_value = {
+            "test-uuid-1": {
+                "Plastics": {
+                    "bottles": {"value": 5, "confidence": 0.99},
+                    "bags": {"value": 3, "confidence": 0.90},  # Low confidence
+                    "straws": {"value": "invalid", "confidence": 0.99}  # Non-integer
+                },
+                "Glass": {
+                    "bottles": {"value": None, "confidence": 0.99},  # None -> 0
+                    "jars": {"value": 2, "confidence": 0.95}
+                }
+            }
+        }
+
+        # Create a sample image
+        img = Image.new('RGB', (50, 50), color='blue')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        image_bytes = buffer.read()
+
+            files = [("files", ("image.jpg", BytesIO(image_bytes), "image/jpeg"))]
+            metadata = json.dumps([{"uuid": "test-uuid-1", "metadata": {"location": "beach"}}])
+
+            response = client.post(
+                "/upload",
+                files=files,
+                data={"metadata": metadata}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Verify structure
+            assert "results" in data
+            assert len(data["results"]) == 1
+
+            result = data["results"][0]
+            assert result["uuid"] == "test-uuid-1"
+            assert "image" in result  # Base64 image
+            assert "form" in result
+
+            # Verify form structure
+            form = result["form"]
+            assert len(form["categories"]) == 2
+
+            # Check Plastics category
+            plastics = form["categories"][0]
+            assert plastics["name"] == "Plastics"
+            assert len(plastics["fields"]) == 3
+
+            # Verify field statuses
+            bottles_field = next(f for f in plastics["fields"] if f["name"] == "bottles")
+            assert bottles_field["value"] == "5"
+            assert bottles_field["status"] == "confident"
+
+            bags_field = next(f for f in plastics["fields"] if f["name"] == "bags")
+            assert bags_field["value"] == "3"
+            assert bags_field["status"] == "needs-validation"
+
+            straws_field = next(f for f in plastics["fields"] if f["name"] == "straws")
+            assert straws_field["value"] == "invalid"
+            assert straws_field["status"] == "error"
+
+            # Check Glass category
+            glass = form["categories"][1]
+            glass_bottles = next(f for f in glass["fields"] if f["name"] == "bottles")
+            assert glass_bottles["value"] == "0"  # None converted to 0
+            assert glass_bottles["status"] == "confident"
+
+    def test_upload_results_sorted_by_issues(self, tmp_path: Path, monkeypatch, mocker):
+        """Test upload results are sorted by number of issues (most first)."""
+        import app.main as main_module
+
+        with monkeypatch.context() as m:
+            m.setattr(main_module, 'SCHEMA_FILE', tmp_path / "form_schema.json")
+            client = TestClient(app)
+            schema = {
+            "categories": [
+                {
+                    "name": "Plastics",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "bags"},
+                        {"name": "straws"}
+                    ]
+                },
+                {
+                    "name": "Glass",
+                    "fields": [
+                        {"name": "bottles"},
+                        {"name": "jars"}
+                    ]
+                }
+            ]
+        }
+
+        # Setup schema
+        client.put("/form-schema", json=schema)
+
+        # Mock OCR with varying issues
+        mock_ocr = mocker.patch('app.main.ocr_process_images')
+        mock_ocr.return_value = {
+            "image-1": {  # 2 issues
+                "Plastics": {
+                    "bottles": {"value": 5, "confidence": 0.99},  # confident
+                    "bags": {"value": 3, "confidence": 0.90},  # needs-validation
+                    "straws": {"value": "bad", "confidence": 0.99}  # error
+                },
+                "Glass": {
+                    "bottles": {"value": 1, "confidence": 0.99},  # confident
+                    "jars": {"value": 2, "confidence": 0.99}  # confident
+                }
+            },
+            "image-2": {  # 0 issues (all confident)
+                "Plastics": {
+                    "bottles": {"value": 10, "confidence": 0.99},
+                    "bags": {"value": 5, "confidence": 0.99},
+                    "straws": {"value": 3, "confidence": 0.99}
+                },
+                "Glass": {
+                    "bottles": {"value": 2, "confidence": 0.99},
+                    "jars": {"value": 1, "confidence": 0.99}
+                }
+            },
+            "image-3": {  # 4 issues
+                "Plastics": {
+                    "bottles": {"value": 5, "confidence": 0.80},  # needs-validation
+                    "bags": {"value": "x", "confidence": 0.99},  # error
+                    "straws": {"value": 2, "confidence": 0.90}  # needs-validation
+                },
+                "Glass": {
+                    "bottles": {"value": 1, "confidence": 0.99},  # confident
+                    "jars": {"value": 2, "confidence": 0.85}  # needs-validation
+                }
+            }
+        }
+
+        # Create a sample image
+        img = Image.new('RGB', (50, 50), color='green')
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG')
+        buffer.seek(0)
+        image_bytes = buffer.read()
+
+            files = [
+                ("files", (f"image-{i}.jpg", BytesIO(image_bytes), "image/jpeg"))
+                for i in range(1, 4)
+            ]
+            metadata = json.dumps([
+                {"uuid": f"image-{i}", "metadata": {}}
+                for i in range(1, 4)
+            ])
+
+            response = client.post(
+                "/upload",
+                files=files,
+                data={"metadata": metadata}
+            )
+
+            assert response.status_code == 200
+            results = response.json()["results"]
+
+            # Verify sorting: image-3 (4 issues), image-1 (2 issues), image-2 (0 issues)
+            assert results[0]["uuid"] == "image-3"
+            assert results[1]["uuid"] == "image-1"
+            assert results[2]["uuid"] == "image-2"
+
+            # Verify issue counts by counting non-confident statuses
+            def count_issues(result):
+                count = 0
+                for category in result["form"]["categories"]:
+                    for field in category["fields"]:
+                        if field["status"] in ["needs-validation", "error"]:
+                            count += 1
+                return count
+
+            assert count_issues(results[0]) == 4
+            assert count_issues(results[1]) == 2
+            assert count_issues(results[2]) == 0
+
+
+class TestHealthEndpoint:
+    """Tests for health check endpoint."""
+
+    def test_health_check(self):
+        """Test health endpoint returns healthy status."""
+        client = TestClient(app)
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "healthy"}

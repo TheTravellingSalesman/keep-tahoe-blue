@@ -1,0 +1,74 @@
+{
+  "categories": [
+    {
+      "name": "Plastic Items",
+      "fields": [
+        {"name": "Cigarette butts"},
+        {"name": "Plastic bags"},
+        {"name": "Plastic bottles"},
+        {"name": "Plastic bottle caps"},
+        {"name": "Plastic cups/lids"},
+        {"name": "Plastic food wrappers"},
+        {"name": "Plastic sled pieces"},
+        {"name": "Plastic straws/stirs/straw wrappers"},
+        {"name": "Plastic takeout containers/plates"},
+        {"name": "Plastic utensils"},
+        {"name": "Other plastic pieces"}
+      ]
+    },
+    {
+      "name": "Styrofoam plastic items",
+      "fields": [
+        {"name": "Styrofoam cups"},
+        {"name": "Styrofoam takeout containers/plates"},
+        {"name": "Other Styrofoam pieces"}
+      ]
+    },
+    {
+      "name": "Other (common items or concerns)",
+      "fields": [
+        {"name": "Fireworks & celebration items"},
+        {"name": "Food waste"}
+      ]
+    },
+    {
+      "name": "Metal items",
+      "fields": [
+        {"name": "Metal cans/pull tabs/metal bottle caps"},
+        {"name": "Other metal/aluminum pieces"}
+      ]
+    },
+    {
+      "name": "Paper items",
+      "fields": [
+        {"name": "Paper cups/lids"},
+        {"name": "Paper straws"},
+        {"name": "Paper takeout containers/plates"}
+      ]
+    },
+    {
+      "name": "Glass items",
+      "fields": [
+        {"name": "Glass bottles"},
+        {"name": "Other glass pieces"}
+      ]
+    },
+    {
+      "name": "Personal hygiene",
+      "fields": [
+        {"name": "Health/safety items (mask, wipes, gloves)"},
+        {"name": "Sanitary items (diapers, tampon, toilet paper, band aid, condom)"},
+        {"name": "Human waste (don't pick up)"},
+        {"name": "Syringes (don't pick up)"}
+      ]
+    },
+    {
+      "name": "Animal waste",
+      "fields": [
+        {"name": "Dog waste in bag"},
+        {"name": "Dog waste not in bag (piles)"},
+        {"name": "Wildlife waste with trash in it (piles)"}
+      ]
+    }
+  ]
+}
