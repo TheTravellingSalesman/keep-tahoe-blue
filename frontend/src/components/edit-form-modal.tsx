@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/accordion";
 import { Input } from "@/components/ui/input";
 import { Plus, Trash2, Pencil } from "lucide-react";
-import { saveCategories } from "@/app/actions/category-actions";
 
 async function fetchSchema(): Promise<Category[]> {
   const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
@@ -100,8 +99,23 @@ export function EditFormModal({ isOpen, onOpenChange }: EditFormModalProps) {
   };
 
   const handleSaveChanges = async () => {
-    await saveCategories(categories);
-    onOpenChange(false);
+    try {
+      const response = await fetch('/api/categories', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(categories),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to save categories');
+      }
+
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Error saving categories:', error);
+      // You could add toast notification here if needed
+    }
   };
 
   return (
