@@ -1,0 +1,47 @@
+categories:
+  - name: Plastic Items
+    subcategories:
+      - Cigarette butts
+      - Plastic bags
+      - Plastic bottles
+      - Plastic bottle caps
+      - Plastic cups/lids
+      - Plastic food wrappers
+      - Plastic sled pieces
+      - Plastic straws/stirs/straw wrappers
+      - Plastic takeout containers/plates
+      - Plastic utensils
+      - Other plastic pieces
+  - name: Styrofoam plastic items
+    subcategories:
+      - Styrofoam cups
+      - Styrofoam takeout containers/plates
+      - Other Styrofoam pieces
+  - name: Other (common items or concerns)
+    subcategories:
+      - Fireworks & celebration items
+      - Food waste
+  - name: Metal items
+    subcategories:
+      - Metal cans/pull tabs/metal bottle caps
+      - Other metal/aluminum pieces
+  - name: Paper items
+    subcategories:
+      - Paper cups/lids
+      - Paper straws
+      - Paper takeout containers/plates
+  - name: Glass items
+    subcategories:
+      - Glass bottles
+      - Other glass pieces
+  - name: Personal hygiene
+    subcategories:
+      - Health/safety items (mask, wipes, gloves)
+      - Sanitary items (diapers, tampon, toilet paper, band aid, condom)
+      - Human waste (don't pick up)
+      - Syringes (don't pick up)
+  - name: Animal waste
+    subcategories:
+      - Dog waste in bag
+      - Dog waste not in bag (piles)
+      - Wildlife waste with trash in it (piles)
